@@ -105,6 +105,8 @@ Run a tool directly from an Ubuntu Docker host:
 
 ```sh
 docker run --rm \
+  -v ${PWD}:/data \
+  --workdir /data \
   --platform linux/amd64 \
   ghcr.io/jamiefletchertv/apple-http-live-streaming-tools:latest \
   mediastreamvalidator --help
@@ -113,15 +115,15 @@ docker run --rm \
 Mount a local working directory when validating streams or writing output files:
 
 ```sh
-mkdir -p "$PWD/hls-output"
+mkdir hls-output
 
 docker run --rm \
-  --platform linux/amd64 \
-  -v "$PWD/hls-output:/work" \
+  -v ${PWD}:/data \
+  --workdir /data \
   ghcr.io/jamiefletchertv/apple-http-live-streaming-tools:latest \
   mediastreamvalidator \
     --timeout 20 \
-    --validation-data-path /work/validation-data.json \
+    -O hls-output/validation-data.json \
     https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8
 ```
 
