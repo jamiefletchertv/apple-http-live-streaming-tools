@@ -86,6 +86,47 @@ Please refer to the man-pages for detailed instructions for how to use the tools
 	man tsrecompressor
 	man variantplaylistcreator
 
+## Ubuntu Docker Image
+
+This repository publishes a Linux `amd64` Ubuntu image to GitHub Container Registry:
+
+```sh
+docker pull ghcr.io/jamiefletchertv/apple-http-live-streaming-tools:latest
+```
+
+If the GHCR package is private, log in first with a GitHub token that has `read:packages` permission:
+
+```sh
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_USER" --password-stdin
+docker pull ghcr.io/jamiefletchertv/apple-http-live-streaming-tools:latest
+```
+
+Run a tool directly from an Ubuntu Docker host:
+
+```sh
+docker run --rm \
+  --platform linux/amd64 \
+  ghcr.io/jamiefletchertv/apple-http-live-streaming-tools:latest \
+  mediastreamvalidator --help
+```
+
+Mount a local working directory when validating streams or writing output files:
+
+```sh
+mkdir -p "$PWD/hls-output"
+
+docker run --rm \
+  --platform linux/amd64 \
+  -v "$PWD/hls-output:/work" \
+  ghcr.io/jamiefletchertv/apple-http-live-streaming-tools:latest \
+  mediastreamvalidator \
+    --timeout 20 \
+    --validation-data-path /work/validation-data.json \
+    https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8
+```
+
+The Linux image includes the tools installed by the Ubuntu package, including `id3taggenerator`, `mediafilesegmenter`, `mediastreamsegmenter`, `mediastreamvalidator`, `mediasubtitlesegmenter`, and `variantplaylistcreator`. The Low-Latency HLS example scripts are available in `/usr/local/share/hlstools`.
+
 
 
 Copyright © 2024-2026 Apple Inc. All Rights Reserved.
