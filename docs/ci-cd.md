@@ -6,6 +6,7 @@ Three workflows in `.github/workflows/` make up the pipeline:
 |:---------|:--------|:-------------|
 | `ci.yml` | pull requests, pushes to `dev` and `main`, manual runs, and calls from `release.yml` | Lints, builds the image, validates streams, smoke-tests the macOS installers, runs the Ponytail audit, and publishes `:dev` or `:latest` |
 | `release.yml` | `vX.Y.Z` tags | Re-runs `ci.yml` on the tagged commit, publishes versioned images and creates the GitHub Release |
+| `automerge.yml` | pull requests labelled `automerge`, and Dependabot PRs | Turns on GitHub auto-merge (squash) so the PR merges once the required CI checks pass |
 | `ponytail-audit.yml` | called by `ci.yml`, weekly schedule, manual runs | Whole-repo audit with the Ponytail `ponytail-audit` skill, reported as a job summary and artifact |
 
 `linux-rhel-ubuntu-debian` is treated the same as `main` until the Linux work is merged into `main`.
@@ -119,6 +120,25 @@ Every `msvsummary` Markdown report is added to the job summary, and all JSON, Ma
 
 To move to a newer Ponytail version, review the upstream diff and update `PONYTAIL_REF`.
 
+## Auto-merge
+
+Add the `automerge` label to a pull request (or let Dependabot open one) and `automerge.yml` turns on GitHub's auto-merge. GitHub then squash-merges the PR as soon as every required check is green, and leaves it open if any check fails.
+
+```mermaid
+flowchart LR
+  pr([PR labelled automerge<br/>or from Dependabot]) --> guard{Target branch has<br/>required status checks?}
+  guard -- no --> stop[Job fails:<br/>would merge without CI]
+  guard -- yes --> enable[gh pr merge --auto --squash]
+  enable --> wait{Required CI checks}
+  wait -- all green --> merged([Merged → push workflow publishes :dev / :latest])
+  wait -- any red --> open([Stays open])
+```
+
+* Draft PRs and PRs from forks are never auto-merged.
+* The job refuses to run when the target branch has no required status checks, because GitHub would merge immediately.
+* Add an `AUTOMERGE_TOKEN` secret (a fine-grained PAT or GitHub App token with *Contents* and *Pull requests* write). Merges made with the default `GITHUB_TOKEN` do not trigger other workflows, so without it a merge into `dev` or `main` would not publish an image.
+* Remove the label, or run `gh pr merge --disable-auto <PR>`, to cancel.
+
 ## Release
 
 ```mermaid
@@ -150,6 +170,7 @@ The release body lists the bundled tool versions and the `docker pull` command; 
 
 ## Repository settings this pipeline expects
 
-* **Secrets:** `ANTHROPIC_API_KEY` for the Ponytail audit (optional).
+* **Secrets:** `ANTHROPIC_API_KEY` for the Ponytail audit (optional); `AUTOMERGE_TOKEN` for auto-merge.
+* **General settings:** enable *Allow auto-merge*.
 * **Branches:** `dev` and `main`. Protect both and require the `Lint and verify packages`, `Build, validate and publish image` and `macOS package smoke test` checks.
 * **Packages:** Actions needs write access to the GHCR package (Settings → Actions → General → Workflow permissions, or the package's own access settings).
