@@ -1,0 +1,6 @@
+ignored:
+  # The base image is a build argument (DEBIAN_IMAGE) whose default is tagged.
+  - DL3006
+  # Debian packages come from the stable trixie archive; pinning exact
+  # versions would break the build on every Debian point release.
+  - DL3008

@@ -4,5 +4,7 @@
 !readme.md
 !hlstools/
 !hlstools/**
-!installer-pkg/
-!installer-pkg/**
+!packages/SHA256SUMS
+!packages/linux/
+!packages/linux/**
+!scripts/hls-validate

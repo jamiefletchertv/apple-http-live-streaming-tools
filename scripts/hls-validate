@@ -1,0 +1,54 @@
+#!/usr/bin/env sh
+# Validate an HLS stream with mediastreamvalidator 2.x, gate on its findings
+# and write msvsummary reports next to the validation data.
+#
+# Usage: hls-validate [mediastreamvalidator options] <playlist URL or path>
+#
+# Environment:
+#   HLS_VALIDATION_JSON  validation data file (default: validation_data.json)
+#   HLS_TIMEOUT          validation timeout in seconds, or "none" (default: 30)
+#   HLS_EXIT_THRESHOLD   lowest severity that fails the run: failure, critical,
+#                        must, must_auth, should, should_auth, advisory or none
+#                        (default: must)
+#   HLS_SETTINGS         optional JSON/JSON5 file passed with --include-settings
+#   HLS_SUMMARY_DETAIL   msvsummary --detail level (default: normal)
+#
+# Exit status is mediastreamvalidator's: 0 when nothing at or above the
+# threshold was reported, 253 (-3) when something was, 254 (-2) for a
+# configuration error.
+set -u
+
+if [ "$#" -eq 0 ]; then
+  echo "usage: hls-validate [mediastreamvalidator options] <playlist URL or path>" >&2
+  exit 2
+fi
+
+json="${HLS_VALIDATION_JSON:-validation_data.json}"
+report_base="${json%.json}"
+
+set -- \
+  --timeout "${HLS_TIMEOUT:-30}" \
+  --exit-code.threshold "${HLS_EXIT_THRESHOLD:-must}" \
+  --validation-data-path "${json}" \
+  "$@"
+if [ -n "${HLS_SETTINGS:-}" ]; then
+  set -- --include-settings "${HLS_SETTINGS}" "$@"
+fi
+
+mediastreamvalidator "$@"
+status=$?
+
+if [ -s "${json}" ]; then
+  detail="${HLS_SUMMARY_DETAIL:-normal}"
+  msvsummary --detail "${detail}" --format markdown --output "${report_base}.md" "${json}" \
+    || echo "hls-validate: msvsummary could not summarise ${json}" >&2
+  msvsummary --detail "${detail}" --format html --output "${report_base}.html" "${json}" \
+    || echo "hls-validate: msvsummary could not summarise ${json}" >&2
+fi
+
+case "${status}" in
+  0) echo "hls-validate: PASS (threshold: ${HLS_EXIT_THRESHOLD:-must})" >&2 ;;
+  253) echo "hls-validate: FAIL - findings at or above '${HLS_EXIT_THRESHOLD:-must}'; see ${report_base}.md" >&2 ;;
+  *) echo "hls-validate: mediastreamvalidator exited with status ${status}" >&2 ;;
+esac
+exit "${status}"

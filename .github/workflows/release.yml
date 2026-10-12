@@ -1,0 +1,145 @@
+name: Release
+
+# Push a semver tag (vX.Y.Z) on a commit that is already on main to:
+#   1. re-run the full CI pipeline (lint, image build, validation tests, macOS
+#      smoke test, Ponytail audit) against the tagged commit,
+#   2. publish ghcr.io/<repo>:X.Y.Z, :X.Y and :msv-<validator version>,
+#   3. create a GitHub Release with the validation and audit reports attached.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  guard:
+    name: Check the tag is on main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require the tagged commit to be on a release branch
+        run: |
+          for branch in main linux-rhel-ubuntu-debian; do
+            if git rev-parse --verify --quiet "origin/${branch}" > /dev/null \
+              && git merge-base --is-ancestor "${GITHUB_SHA}" "origin/${branch}"; then
+              echo "${GITHUB_REF_NAME} (${GITHUB_SHA}) is on ${branch}."
+              exit 0
+            fi
+          done
+          echo "::error::${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not on main. Merge dev into main first, then tag main."
+          exit 1
+
+  ci:
+    name: CI
+    needs: guard
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  publish:
+    name: Publish release image
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=msv-${{ needs.ci.outputs.validation-version }}
+
+      - name: Build and publish
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+
+  github-release:
+    name: Create GitHub Release
+    needs: [ci, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download validation results
+        uses: actions/download-artifact@v4
+        with:
+          name: hls-validation-results
+          path: dist/hls-validation-results
+
+      - name: Download Ponytail audit report
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ponytail-audit-report
+          path: dist
+
+      - name: Package release assets
+        run: |
+          tar -czf "dist/hls-validation-results-${GITHUB_REF_NAME}.tar.gz" -C dist hls-validation-results
+          cp packages/SHA256SUMS dist/SHA256SUMS
+          {
+            echo "## Tool versions"
+            echo
+            echo "- mediastreamvalidator / msvsummary: ${{ needs.ci.outputs.validation-version }}"
+            echo "- Authoring tools: ${{ needs.ci.outputs.authoring-version }}"
+            echo
+            echo "## Docker image"
+            echo
+            echo '```sh'
+            echo "docker pull ${REGISTRY}/${IMAGE_NAME}:${GITHUB_REF_NAME#v}"
+            echo '```'
+          } > dist/release-notes.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: dist/release-notes.md
+          generate_release_notes: true
+          files: |
+            dist/hls-validation-results-*.tar.gz
+            dist/SHA256SUMS
+            dist/ponytail-audit.md
+          fail_on_unmatched_files: false
