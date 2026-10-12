@@ -13,8 +13,12 @@ work="$(cd "${OUTPUT_DIR}" && pwd)/local-fixture-$$"
 mkdir -p "${work}"
 cp "${FIXTURE}" "${work}/input.mp4"
 
+# Run as the calling user so the host (e.g. a CI runner) can read what the
+# tools write; mediafilesegmenter creates its output directory with mode 0700.
 run() {
-  docker run --rm --platform linux/amd64 -v "${work}:/work" --workdir /work "${IMAGE}" "$@"
+  docker run --rm --platform linux/amd64 \
+    --user "$(id -u):$(id -g)" -e HOME=/tmp \
+    -v "${work}:/work" --workdir /work "${IMAGE}" "$@"
 }
 
 echo "== Segmenting fixture with mediafilesegmenter"
@@ -34,7 +38,6 @@ test -s "${work}/good-validation.md"
 test -s "${work}/good-validation.html"
 
 echo "== Validating broken stream (expect FAIL)"
-# Built inside the container: segmenter output is owned by the container user.
 run sh -c '
   set -eu
   mkdir -p broken

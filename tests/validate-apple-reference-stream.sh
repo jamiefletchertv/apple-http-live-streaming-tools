@@ -19,6 +19,7 @@ results="$(cd "${OUTPUT_DIR}" && pwd)"
 set +e
 docker run --rm \
   --platform linux/amd64 \
+  --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "${results}:/results" \
   -e HLS_VALIDATION_JSON=/results/apple-bipbop-validation.json \
   -e HLS_TIMEOUT="${VALIDATION_SECONDS}" \
