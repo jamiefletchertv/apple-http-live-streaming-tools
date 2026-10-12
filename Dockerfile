@@ -49,13 +49,17 @@ COPY --from=unpack /debs/ /tmp/debs/
 COPY hlstools/ /usr/local/share/hlstools/
 COPY scripts/hls-validate /usr/local/bin/hls-validate
 
-# Install order matches Apple's deploy.sh DEPENDENCY_LIST.
+# Install order matches Apple's deploy.sh DEPENDENCY_LIST. Apple's .debs do not
+# declare their system library dependencies, so they are listed explicitly and
+# checked with ldd below.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         libatomic1 \
         libcurl4t64 \
+        libicu76 \
+        libxml2 \
         python3 \
         /tmp/debs/deps/libblocksruntime-release-*.deb \
         /tmp/debs/deps/libdispatch-release-*.deb \
@@ -75,6 +79,8 @@ RUN set -eux; \
     printf '%s\n' /usr/lib64 /usr/local/lib64 > /etc/ld.so.conf.d/hlstools.conf; \
     ldconfig; \
     rm -rf /tmp/debs /var/lib/apt/lists/*; \
+    missing="$(ldd /usr/local/bin/* /usr/lib64/*.so* /usr/local/lib*/*.so* 2>/dev/null | grep 'not found' | sort -u || true)"; \
+    if [ -n "${missing}" ]; then echo "Missing shared libraries:"; echo "${missing}"; exit 1; fi; \
     for tool in mediastreamvalidator msvsummary id3taggenerator mediafilesegmenter \
                 mediastreamsegmenter mediasubtitlesegmenter variantplaylistcreator hls-validate; do \
         command -v "${tool}"; \

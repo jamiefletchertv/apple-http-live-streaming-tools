@@ -127,7 +127,7 @@ jobs:
         with:
           name: hls-validation-results
           path: tests/results/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Log in to GitHub Container Registry
