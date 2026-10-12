@@ -1,0 +1,90 @@
+name: Ponytail audit
+
+# Whole-repo quality audit with the Ponytail `ponytail-audit` skill
+# (https://github.com/DietrichGebert/ponytail) run by Claude Code.
+# Report-only: it writes ponytail-audit.md as an artifact and job summary and
+# never changes code. Needs the ANTHROPIC_API_KEY repository secret; without
+# it the job is skipped with a notice so forks and new clones stay green.
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  # Pinned so a change upstream cannot alter what runs with the API key.
+  PONYTAIL_REPOSITORY: DietrichGebert/ponytail
+  PONYTAIL_REF: 9b58c1ffb790c075ca32e70a89cf1d80588f4abf
+
+jobs:
+  audit:
+    name: ponytail-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check for Anthropic API key
+        id: key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "${ANTHROPIC_API_KEY}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Ponytail audit skipped::Add an ANTHROPIC_API_KEY repository secret to run the audit."
+          fi
+
+      - name: Checkout
+        if: steps.key.outputs.present == 'true'
+        uses: actions/checkout@v4
+
+      - name: Checkout Ponytail skill
+        if: steps.key.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PONYTAIL_REPOSITORY }}
+          ref: ${{ env.PONYTAIL_REF }}
+          path: .ponytail
+          sparse-checkout: skills/ponytail-audit
+          persist-credentials: false
+
+      - name: Run ponytail-audit
+        if: steps.key.outputs.present == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            Read .ponytail/skills/ponytail-audit/SKILL.md and follow it exactly to audit this
+            whole repository. Skip the .ponytail/ directory itself, and treat the vendored
+            Apple binaries under packages/ and installer-pkg/ as opaque inputs (audit how
+            they are verified and installed, not their contents).
+            Write the complete report, in the format the skill specifies, to
+            ponytail-audit.md in the repository root. Do not create or modify any other file.
+          claude_args: >-
+            --allowedTools "Read,Glob,Grep,Write"
+            --max-turns 60
+
+      - name: Publish report
+        if: steps.key.outputs.present == 'true' && always()
+        run: |
+          if [ ! -s ponytail-audit.md ]; then
+            echo "::warning title=Ponytail audit::No report was written."
+            exit 0
+          fi
+          cat ponytail-audit.md >> "$GITHUB_STEP_SUMMARY"
+          if grep -qi '^\**must fix' ponytail-audit.md; then
+            echo "::warning title=Ponytail audit::The audit reported Must fix findings. See the job summary."
+          fi
+
+      - name: Upload report
+        if: steps.key.outputs.present == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ponytail-audit-report
+          path: ponytail-audit.md
+          if-no-files-found: ignore
+          retention-days: 30

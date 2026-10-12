@@ -86,49 +86,73 @@ Please refer to the man-pages for detailed instructions for how to use the tools
 	man tsrecompressor
 	man variantplaylistcreator
 
-## Ubuntu Docker Image
+## Docker Image (Linux)
 
-This repository publishes a Linux `amd64` Ubuntu image to GitHub Container Registry:
+This repository publishes a Linux `amd64` image, built on Debian 13 (trixie), to GitHub Container Registry. It contains:
+
+* `mediastreamvalidator` **2.0.284** and `msvsummary` (HLS Tools validation package 2.0)
+* the **1.27.0** authoring tools: `id3taggenerator`, `mediafilesegmenter`, `mediastreamsegmenter`, `mediasubtitlesegmenter`, `variantplaylistcreator`
+* `hls-validate`, a CI-friendly wrapper around `mediastreamvalidator` (see below)
+* the Low-Latency HLS example scripts in `/usr/local/share/hlstools`
 
 ```sh
 docker pull ghcr.io/jamiefletchertv/apple-http-live-streaming-tools:latest
 ```
+
+| Tag | Built from |
+|:----|:-----------|
+| `latest` | `main` |
+| `dev` | `dev` |
+| `X.Y.Z`, `X.Y` | release tag `vX.Y.Z` |
+| `msv-2.0.284` | release built with that mediastreamvalidator version |
+| `sha-<commit>` | every published build |
 
 If the GHCR package is private, log in first with a GitHub token that has `read:packages` permission:
 
 ```sh
 echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_USER" --password-stdin
-docker pull ghcr.io/jamiefletchertv/apple-http-live-streaming-tools:latest
 ```
 
-Run a tool directly from an Ubuntu Docker host:
+Run a tool directly, mounting the current directory as `/data` (the image's working directory):
 
 ```sh
-docker run --rm \
-  -v ${PWD}:/data \
-  --workdir /data \
-  --platform linux/amd64 \
+docker run --rm -v "${PWD}:/data" --platform linux/amd64 \
   ghcr.io/jamiefletchertv/apple-http-live-streaming-tools:latest \
   mediastreamvalidator --help
 ```
 
-Mount a local working directory when validating streams or writing output files:
+### Validating a stream with mediastreamvalidator 2.x
+
+`hls-validate` runs `mediastreamvalidator` with a CI exit threshold and writes Markdown and HTML reports with `msvsummary`:
 
 ```sh
-mkdir hls-output
+mkdir -p hls-output
 
-docker run --rm \
-  -v ${PWD}:/data \
-  --workdir /data \
+docker run --rm -v "${PWD}:/data" --platform linux/amd64 \
+  -e HLS_VALIDATION_JSON=hls-output/validation_data.json \
+  -e HLS_EXIT_THRESHOLD=must \
   ghcr.io/jamiefletchertv/apple-http-live-streaming-tools:latest \
-  mediastreamvalidator \
-    --timeout 20 \
-    -O hls-output/validation-data.json \
-    https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8
+  hls-validate https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8
 ```
 
-The Linux image includes the tools installed by the Ubuntu package, including `id3taggenerator`, `mediafilesegmenter`, `mediastreamsegmenter`, `mediastreamvalidator`, `mediasubtitlesegmenter`, and `variantplaylistcreator`. The Low-Latency HLS example scripts are available in `/usr/local/share/hlstools`.
+This produces `hls-output/validation_data.json` (format 3.1), `validation_data.md` and `validation_data.html`, and exits non-zero when anything at or above the threshold is found. Any extra arguments are passed straight to `mediastreamvalidator`.
 
+See [docs/mediastreamvalidator-v2.md](docs/mediastreamvalidator-v2.md) for what changed in version 2 and how to configure it.
 
+## CI/CD
+
+Pull requests, `dev`, `main` and `vX.Y.Z` tags each run the pipeline described in [docs/ci-cd.md](docs/ci-cd.md): lint and package checks, image build, offline and live stream validation, a macOS smoke test of the DMG installers, and a Ponytail code audit.
+
+## Repository layout
+
+| Path | Contents |
+|:-----|:---------|
+| `packages/linux/` | Apple's Debian `.tgz` packages used by the Docker image (validation 2.0.284, authoring 1.27.0) |
+| `packages/macos/` | Apple's macOS DMG installers for the same versions |
+| `packages/SHA256SUMS` | Checksums verified by CI and by the Docker build |
+| `installer-pkg/` | Earlier 1.26.143 packages (Ubuntu, Debian and RHEL), kept for reference |
+| `scripts/hls-validate` | Validation wrapper installed in the image |
+| `tests/` | Pipeline tests and the synthetic test clip |
+| `docs/` | Pipeline and validator documentation |
 
 Copyright © 2024-2026 Apple Inc. All Rights Reserved.

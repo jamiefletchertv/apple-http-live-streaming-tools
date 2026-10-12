@@ -1,0 +1,51 @@
+name: Auto-merge
+
+# Turns on GitHub auto-merge for pull requests that carry the `automerge`
+# label, and for Dependabot updates. GitHub then merges the PR by itself once
+# every required status check (branch protection) has passed.
+#
+# Needs: an AUTOMERGE_TOKEN secret (see the last step), Settings → General → "Allow auto-merge", and branch protection on the
+# target branch with the CI checks marked as required. Without required checks
+# GitHub would merge straight away, so this workflow refuses to enable it.
+on:
+  pull_request:
+    types: [opened, reopened, labeled, synchronize, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable:
+    name: Enable auto-merge
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft &&
+      (contains(github.event.pull_request.labels.*.name, 'automerge') ||
+       github.event.pull_request.user.login == 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the target branch requires status checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          # Classic branch protection, then repository rulesets.
+          classic="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${BASE}" \
+            --jq '(.protection.required_status_checks.contexts // []) | length')"
+          rulesets="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/${BASE}" \
+            --jq '[.[] | select(.type == "required_status_checks")] | length')"
+          checks=$((classic + rulesets))
+          if [ "${checks}" -eq 0 ]; then
+            echo "::error::${BASE} has no required status checks, so auto-merge would merge without waiting for CI. Add branch protection first (see docs/ci-cd.md)."
+            exit 1
+          fi
+
+      - name: Enable auto-merge (squash)
+        env:
+          # A merge made with GITHUB_TOKEN does not start the push workflows, so
+          # :dev / :latest would not be published. AUTOMERGE_TOKEN (a fine-grained
+          # PAT or GitHub App token with contents + pull requests write) avoids that.
+          GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "${PR_URL}"

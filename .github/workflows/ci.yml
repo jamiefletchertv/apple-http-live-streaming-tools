@@ -1,0 +1,196 @@
+name: CI
+
+# dev  -> lint, build, test, Ponytail audit, publish ghcr.io/<repo>:dev
+# main -> lint, build, test, Ponytail audit, publish ghcr.io/<repo>:latest
+# PRs  -> lint, build, test, Ponytail audit (nothing is published)
+# release.yml calls this workflow (workflow_call) before it cuts a release.
+on:
+  push:
+    branches:
+      - dev
+      - main
+      - linux-rhel-ubuntu-debian
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      validation-version:
+        description: mediastreamvalidator version baked into the image
+        value: ${{ jobs.image.outputs.validation-version }}
+      authoring-version:
+        description: Authoring tools version baked into the image
+        value: ${{ jobs.image.outputs.authoring-version }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  lint:
+    name: Lint and verify packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify vendored Apple packages
+        run: sha256sum --check --strict packages/SHA256SUMS
+
+      - name: ShellCheck
+        run: shellcheck scripts/hls-validate tests/*.sh
+
+      - name: Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
+
+      - name: Syntax-check Low-Latency HLS origin examples
+        run: |
+          php -l hlstools/lowLatencyHLS.php
+          gofmt -e hlstools/ll-hls-origin-example.go > /dev/null
+
+  image:
+    name: Build, validate and publish image
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      validation-version: ${{ steps.versions.outputs.validation }}
+      authoring-version: ${{ steps.versions.outputs.authoring }}
+    env:
+      PUBLISH: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/linux-rhel-ubuntu-debian') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read tool versions from Dockerfile
+        id: versions
+        run: |
+          echo "validation=$(sed -n 's/^ARG HLS_VALIDATION_VERSION=//p' Dockerfile)" >> "$GITHUB_OUTPUT"
+          echo "authoring=$(sed -n 's/^ARG HLS_AUTHORING_VERSION=//p' Dockerfile)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: hlstools:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Offline fixture test (segment, validate, gate)
+        env:
+          IMAGE: hlstools:test
+        run: ./tests/validate-local-fixture.sh
+
+      - name: Validate Apple HLS reference stream
+        env:
+          IMAGE: hlstools:test
+          VALIDATION_SECONDS: "20"
+        run: ./tests/validate-apple-reference-stream.sh
+
+      - name: Publish validation summaries
+        if: always()
+        run: |
+          shopt -s nullglob globstar
+          for report in tests/results/**/*.md; do
+            {
+              echo "<details><summary>${report#tests/results/}</summary>"
+              echo
+              cat "${report}"
+              echo
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hls-validation-results
+          path: tests/results/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Log in to GitHub Container Registry
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        if: env.PUBLISH == 'true'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/linux-rhel-ubuntu-debian' }}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=ref,event=branch
+            type=sha,format=short
+
+      - name: Publish image
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+
+  macos:
+    name: macOS package smoke test
+    needs: lint
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install HLS tools from the vendored DMGs
+        run: ./tests/install-macos-dmgs.sh packages/macos
+
+      - name: Segment and validate the fixture with the native tools
+        run: |
+          mediastreamvalidator --version
+          mediafilesegmenter --version
+          mkdir -p tests/results/macos
+          cd tests/results/macos
+          mediafilesegmenter --target-duration 2 --file-base good ../../fixtures/testsrc-6s.mp4
+          HLS_VALIDATION_JSON=macos-validation.json ../../../scripts/hls-validate good/prog_index.m3u8
+
+      - name: Upload macOS validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hls-validation-results-macos
+          path: tests/results/macos/
+          retention-days: 14
+
+  ponytail-audit:
+    name: Ponytail audit
+    needs: lint
+    uses: ./.github/workflows/ponytail-audit.yml
+    secrets: inherit
